@@ -1,0 +1,571 @@
+###1_Download GSE37745_series_matrix.txt and GPL570-55999.txt
+
+
+
+
+###2_Generating a genematrix via Perl Script_1
+
+
+
+
+###3_ESTIMATE
+
+#library(utils)
+#rforge <- "http://r-forge.r-project.org"
+#install.packages("estimate", repos=rforge, dependencies=TRUE)
+
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+#BiocManager::install("limma")
+
+
+
+
+
+
+###4 Merge Survival time and State via Perl Script_2
+
+
+
+
+
+
+###5_ESTIMATE$SURVIVAL
+
+library(limma)
+library(estimate)
+setwd("C:\\Users\\lihm2.DESKTOP-2U61BSK\\Desktop\\GSE\\3\\3.3estimate")           #设置工作目录
+inputFile="geneMatrix.txt"                                                  #输入文件名字
+
+#读取文件
+rt=read.table(inputFile,sep="\t",header=T,check.names=F)
+
+#如果一个基因占了多行，取均值
+rt=as.matrix(rt)
+rownames(rt)=rt[,1]
+exp=rt[,2:ncol(rt)]
+dimnames=list(rownames(exp),colnames(exp))
+data=matrix(as.numeric(as.matrix(exp)),nrow=nrow(exp),dimnames=dimnames)
+data=avereps(data)
+
+#读取肿瘤样品文件
+sample=read.table("sample.txt",header=F,sep="\t",check.names=F)
+data=data[,as.vector(sample[,1])]
+
+#如果数值很大，需要去除log函数这一行的#号
+data=log2(data+1)
+data=data[rowMeans(data)>0,]
+out=normalizeBetweenArrays(data)
+out=rbind(ID=colnames(out),out)
+#输出整理后的矩阵文件
+write.table(out,file="normalize.txt",sep="\t",quote=F,col.names=F)
+
+#运行estimate包
+filterCommonGenes(input.f="normalize.txt", 
+                  output.f="commonGenes.gct", 
+                  id="GeneSymbol")
+
+#计算免疫得分,平台有三种选择，根据自己的分析选择("affymetrix", "agilent", "illumina")
+estimateScore(input.ds = "commonGenes.gct",
+              output.ds="estimateScore.gct", 
+              platform="affymetrix")
+
+#输出每个样品的打分
+scores=read.table("estimateScore.gct",skip = 2,header = T)
+rownames(scores)=scores[,1]
+scores=t(scores[,3:ncol(scores)])
+scores=scores[,1:3]
+out=rbind(ID=colnames(scores),scores)
+write.table(out,file="scores.txt",sep="\t",quote=F,col.names=F)
+
+#install.packages("survival")
+#install.packages("survminer")
+
+library(survival)
+library(survminer)
+
+setwd("D:\\biowolf\\geoEstimate\\07.survival")                  #工作目录（需修改）
+rt=read.table("surInput.txt",header=T,sep="\t",check.names=F,row.names=1)     #读取输入文件
+rt$futime=rt$futime/365                                                       #如果以月为单位，除以30；以年为单位，除以365
+
+outTab=data.frame()
+for(score in colnames(rt[,3:ncol(rt)])){
+	   a=rt[,score]<=median(rt[,score])
+	   diff=survdiff(Surv(futime, fustat) ~a,data = rt)
+	   pValue=1-pchisq(diff$chisq,df=1)
+	   fit=survfit(Surv(futime, fustat) ~ a, data = rt)
+
+	   outTab=rbind(outTab,cbind(score=score,pval=pValue) )
+		 #绘制生存曲线
+		 if(pValue<0.001){
+					 pValue="<0.001"
+			  }else{
+					 pValue=paste0("=",sprintf("%0.3f",pValue))
+				}
+		 surPlot=ggsurvplot(fit, 
+								        data=rt,
+								        conf.int=TRUE,
+								        pval=paste0("p",pValue),
+								        pval.size=6,
+								        risk.table=T,
+								        legend.labs=c("high","low"),
+								        legend.title=gsub("Score"," Score",score),
+								        xlab="Time(years)",
+								        break.time.by = 1,
+								        risk.table.title="",
+								        palette=c("red", "blue"),
+								        risk.table.height=.25)          
+		 pdf(file=paste0("sur.",score,".pdf"), width = 6, height = 5.5,onefile = FALSE)
+		 print(surPlot)
+		 dev.off()
+}
+write.table(outTab,file="survival.result.xls",sep="\t",row.names=F,quote=F)    #输出基因和p值表格文件
+
+
+
+
+
+###6_Merge Clinical Features via Perl Script_3
+
+
+
+
+
+
+
+###7_ESTIMATE & Clinical Features
+#install.packages("beeswarm")
+
+library(beeswarm)
+setwd("D:\\biowolf\\geoEstimate\\09.clinicalCor")               #修改工作目录
+inputFile="scoersCli.txt"                                                     #输入文件名字
+pFilter=0.05
+
+rt=read.table(inputFile,sep="\t",header=T,check.names=F,row.names=1)            #读取输入文件
+score=rt[,(ncol(rt)-2):ncol(rt)]
+cli=rt[,1:(ncol(rt)-3)]
+
+#临床相关性分析，输出表格
+outTab=c()
+outTab=rbind(outTab,c("id",colnames(cli),"SigNum"))
+colnames(outTab)=c("id",colnames(cli),"SigNum")
+for(i in colnames(score)){
+		clinicalPvalVector=c()
+		sigSum=0
+		for(clinical in colnames(cli)){
+		    tab1=table(cli[,clinical])
+		    labelNum=length(tab1)
+			  rt1=cbind(expression=score[,i],clinical=cli[,clinical])
+			  if(labelNum==2){
+			      cliTest<-wilcox.test(expression ~ clinical, data=rt1)
+			  }else{
+			      cliTest<-kruskal.test(expression ~ clinical, data = rt1)}
+			  pValue=cliTest$p.value
+			  clinicalPvalVector=c(clinicalPvalVector,pValue)
+			  if(pValue<pFilter){
+			        sigSum=sigSum+1
+			        #定义颜色
+					    xlabel=vector()
+							dotCol=c(2,3)
+							if(labelNum==3){
+								dotCol=c(2,3,4)
+							}
+							if(labelNum==4){
+								dotCol=c(2,3,4,5)
+							}
+							if(labelNum>4){
+								dotCol=rainbow(labelNum)
+							}
+							for(j in 1:labelNum){
+							  xlabel=c(xlabel,names(tab1[j]) )
+							}
+							#设定p值格式
+							pval=ifelse(pValue<0.001,"<0.001",paste0("=",sprintf("%.03f",pValue)))
+						  #绘制临床相关性箱线图
+					    b = boxplot(expression ~ clinical, data = rt1,outline = FALSE, plot=F)
+							yMin=min(b$stats)
+							yMax = max(b$stats/5+b$stats)
+							n = ncol(b$stats)
+							outPdf=paste0("cliCor.",i,"_",clinical,".pdf")
+							width=ifelse(clinical=="diagnosis",8,7)
+							pdf(file=outPdf,width = width,height = 5)
+							par(mar = c(4.5,6,3,3))
+							j=gsub("Score"," Score",i)
+							boxplot(expression ~ clinical, data = rt1,names=xlabel,
+								     ylab = j,main=paste0(j," (p",pval,")"),xlab=clinical,
+								     cex.main=1.3, cex.lab=1.2, cex.axis=1.1,ylim=c(yMin,yMax),outline = FALSE)
+						  beeswarm(expression ~ clinical, data = rt1, col =dotCol, lwd=0.1,
+						         pch = 16, add = TRUE, corral="wrap")
+						  dev.off()
+			  }
+		}
+		geneClinical=c(i,clinicalPvalVector,sigSum)
+		outTab=rbind(outTab,geneClinical)
+}
+write.table(outTab,file="cliCorResult.xls",sep="\t",col.names=F,row.names=F,quote=F)
+
+
+
+
+
+
+
+
+###8_Stromal Heatmap
+
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+#BiocManager::install("limma")
+
+#install.packages("pheatmap")
+
+logFoldChange=0.5                #logFC过滤阈值
+adjustP=0.05                     #矫正后p值阈值
+scoreType="StromalScore"
+
+library(limma)
+setwd("C:\\Users\\lihm2.DESKTOP-2U61BSK\\Desktop\\食管癌微环境评分文章\\3.8StromalDiff")               #设置工作目录
+rt=read.table("normalize.txt",sep="\t",header=T,check.names=F,row.names=1)    #读取输入文件
+
+#读取score文件
+score=read.table("scores.txt",sep="\t",header=T,check.names=F)
+med=median(score[,scoreType])
+conTab=score[score[,scoreType]<med,]
+treatTab=score[score[,scoreType]>=med,]
+con=as.vector(conTab[,1])
+treat=as.vector(treatTab[,1])
+conNum=length(con)
+treatNum=length(treat)
+rt=cbind(rt[,con],rt[,treat])
+
+#differential
+modType=c(rep("con",conNum),rep("treat",treatNum))
+design <- model.matrix(~0+factor(modType))
+colnames(design) <- c("con","treat")
+fit <- lmFit(rt,design)
+cont.matrix<-makeContrasts(treat-con,levels=design)
+fit2 <- contrasts.fit(fit, cont.matrix)
+fit2 <- eBayes(fit2)
+
+allDiff=topTable(fit2,adjust='fdr',number=200000)
+write.table(allDiff,file="Stromal.all.xls",sep="\t",quote=F)
+
+#输出差异结果
+diffSig <- allDiff[with(allDiff, (abs(logFC)>logFoldChange & adj.P.Val < adjustP )), ]
+diffSigOut=rbind(id=colnames(diffSig),diffSig)
+write.table(diffSigOut,file="Stromal.diff.xls",sep="\t",quote=F,col.names=F)
+
+diffUp <- allDiff[with(allDiff, (logFC>logFoldChange & adj.P.Val < adjustP )), ]
+diffUpOut=rbind(id=colnames(diffUp),diffUp)
+write.table(diffUpOut,file="Stromal.up.txt",sep="\t",quote=F,col.names=F)
+
+diffDown <- allDiff[with(allDiff, (logFC < -logFoldChange & adj.P.Val < adjustP )), ]
+diffDownOut=rbind(id=colnames(diffDown),diffDown)
+write.table(diffDownOut,file="Stromal.down.txt",sep="\t",quote=F,col.names=F)
+
+#绘制差异基因热图
+library(pheatmap)
+geneNum=20
+diffSig=diffSig[order(as.numeric(as.vector(diffSig$logFC))),]
+diffGeneName=as.vector(rownames(diffSig))
+diffLength=length(diffGeneName)
+hmGene=c()
+if(diffLength>40){
+    hmGene=diffGeneName[c(1:geneNum,(diffLength-geneNum+1):diffLength)]
+}else{
+    hmGene=diffGeneName
+}
+hmExp=rt[hmGene,]
+Type=c(rep("Low StromalScore",conNum),rep("High StromalScore",treatNum))
+names(Type)=colnames(rt)
+Type=as.data.frame(Type)
+pdf(file="Stromal.heatmap.pdf",height=6,width=10)
+pheatmap(hmExp, 
+         annotation=Type, 
+         color = colorRampPalette(c("green", "black", "red"))(50),
+         cluster_cols =F,
+         show_colnames = F,
+         fontsize = 10,
+         fontsize_row=8,
+         fontsize_col=10)
+dev.off()
+
+
+
+
+
+
+
+###9 Immnue Heatmap
+
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+#BiocManager::install("limma")
+
+#install.packages("pheatmap")
+
+logFoldChange=0.5                #logFC过滤阈值
+adjustP=0.05                     #矫正后p值阈值
+scoreType="ImmuneScore"
+
+library(limma)
+setwd("C:\\Users\\lihm2.DESKTOP-2U61BSK\\Desktop\\食管癌微环境评分文章\\3.9ImmuneDiff")        #设置工作目录
+rt=read.table("normalize.txt",sep="\t",header=T,check.names=F,row.names=1)    #读取输入文件
+
+#读取score文件
+score=read.table("scores.txt",sep="\t",header=T,check.names=F)
+med=median(score[,scoreType])
+conTab=score[score[,scoreType]<med,]
+treatTab=score[score[,scoreType]>=med,]
+con=as.vector(conTab[,1])
+treat=as.vector(treatTab[,1])
+conNum=length(con)
+treatNum=length(treat)
+rt=cbind(rt[,con],rt[,treat])
+
+#differential
+modType=c(rep("con",conNum),rep("treat",treatNum))
+design <- model.matrix(~0+factor(modType))
+colnames(design) <- c("con","treat")
+fit <- lmFit(rt,design)
+cont.matrix<-makeContrasts(treat-con,levels=design)
+fit2 <- contrasts.fit(fit, cont.matrix)
+fit2 <- eBayes(fit2)
+
+allDiff=topTable(fit2,adjust='fdr',number=200000)
+write.table(allDiff,file="Immune.all.xls",sep="\t",quote=F)
+
+#输出差异结果
+diffSig <- allDiff[with(allDiff, (abs(logFC)>logFoldChange & adj.P.Val < adjustP )), ]
+diffSigOut=rbind(id=colnames(diffSig),diffSig)
+write.table(diffSigOut,file="Immune.diff.xls",sep="\t",quote=F,col.names=F)
+
+diffUp <- allDiff[with(allDiff, (logFC>logFoldChange & adj.P.Val < adjustP )), ]
+diffUpOut=rbind(id=colnames(diffUp),diffUp)
+write.table(diffUpOut,file="Immune.up.txt",sep="\t",quote=F,col.names=F)
+
+diffDown <- allDiff[with(allDiff, (logFC < -logFoldChange & adj.P.Val < adjustP )), ]
+diffDownOut=rbind(id=colnames(diffDown),diffDown)
+write.table(diffDownOut,file="Immune.down.txt",sep="\t",quote=F,col.names=F)
+
+#绘制差异基因热图
+library(pheatmap)
+geneNum=20
+diffSig=diffSig[order(as.numeric(as.vector(diffSig$logFC))),]
+diffGeneName=as.vector(rownames(diffSig))
+diffLength=length(diffGeneName)
+hmGene=c()
+if(diffLength>40){
+    hmGene=diffGeneName[c(1:geneNum,(diffLength-geneNum+1):diffLength)]
+}else{
+    hmGene=diffGeneName
+}
+hmExp=rt[hmGene,]
+Type=c(rep("Low ImmuneScore",conNum),rep("High ImmuneScore",treatNum))
+names(Type)=colnames(rt)
+Type=as.data.frame(Type)
+pdf(file="Immune.heatmap.pdf",height=6,width=10)
+pheatmap(hmExp, 
+         annotation=Type, 
+         color = colorRampPalette(c("green", "black", "red"))(50),
+         cluster_cols =F,
+         show_colnames = F,
+         fontsize = 10,
+         fontsize_row=8,
+         fontsize_col=10)
+dev.off()
+
+
+
+
+
+
+###10_Venn
+#install.packages("VennDiagram")
+
+library(VennDiagram)                                           #引用包
+setwd("C:\\Users\\lihm2.DESKTOP-2U61BSK\\Desktop\\3\\3.10venn")       #设置工作目录
+
+#上调venn图
+files=c("Stromal.up.txt","Immune.up.txt")
+targetList=list()
+for(i in 1:length(files)){
+    inputFile=files[i]
+    rt=read.table(inputFile,header=T)
+    header=unlist(strsplit(inputFile,"Up|\\.|\\-"))
+    targetList[[header[1]]]=as.vector(rt[,1])
+    uniqLength=length(unique(as.vector(rt[,1])))
+    print(paste(header[1],uniqLength,sep=" "))
+}
+
+venn.plot=venn.diagram(targetList,filename=NULL,main="Up",main.cex = 2,
+             fill=c("darkblue", "darkgreen"),cat.cex=1.2)
+pdf(file="UP.pdf",width=7,height=7)
+grid.draw(venn.plot)
+dev.off()
+upGenes=Reduce(intersect,targetList)
+
+#下调venn图
+files=c("Stromal.down.txt","Immune.down.txt")
+targetList=list()
+for(i in 1:length(files)){
+    inputFile=files[i]
+    rt=read.table(inputFile,header=T)
+    header=unlist(strsplit(inputFile,"Down|\\.|\\-"))
+    targetList[[header[1]]]=as.vector(rt[,1])
+    uniqLength=length(unique(as.vector(rt[,1])))
+    print(paste(header[1],uniqLength,sep=" "))
+}
+venn.plot=venn.diagram(targetList,filename=NULL,main="Down",main.cex = 2,
+             fill=c("darkblue", "darkgreen"),cat.cex=1.2)
+pdf(file="DOWN.pdf",width=7,height=7)
+grid.draw(venn.plot)
+dev.off()
+downGenes=Reduce(intersect,targetList)
+
+#输出交集基因
+upGenes=cbind(upGenes,"up")
+downGenes=cbind(downGenes,"down")
+intersectGenes=rbind(upGenes,downGenes)
+colnames(intersectGenes)=c("Gene","Regulation")
+write.table(file="intersectGenes.txt",intersectGenes,sep="\t",quote=F,row.names=F)
+
+
+
+###11_Symbol id exchange
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+#BiocManager::install("org.Hs.eg.db")
+
+
+setwd("C:\\Users\\lihm2.DESKTOP-2U61BSK\\Desktop\\3\\3.11Symbol2id")
+
+library("org.Hs.eg.db")
+rt=read.table("intersectGenes.txt",sep="\t",check.names=F,header=T)
+genes=as.vector(rt[,1])
+entrezIDs <- mget(genes, org.Hs.egSYMBOL2EG, ifnotfound=NA)
+entrezIDs <- as.character(entrezIDs)
+out=cbind(rt,entrezID=entrezIDs)
+write.table(out,file="id.txt",sep="\t",quote=F,row.names=F)
+
+
+
+
+
+
+###12_Merge intersecter gene and Survival Time via Perl Script_4
+
+
+
+
+
+
+
+###13_Gene Survival
+
+#install.packages("survival")
+#install.packages("survminer")
+
+library(survival)
+library(survminer)
+
+setwd("D:\\biowolf\\geoEstimate\\19.geneSurvival")               #工作目录（需修改）
+pFilter=0.05                                                                   #显著性过滤条件
+rt=read.table("expTime.txt",header=T,sep="\t",check.names=F,row.names=1)       #读取输入文件
+rt$futime=rt$futime/365                                                        #如果以月为单位，除以30；以年为单位，除以365
+
+outTab=data.frame()
+for(gene in colnames(rt[,3:ncol(rt)])){
+	   a=rt[,gene]<=median(rt[,gene])
+	   diff=survdiff(Surv(futime, fustat) ~a,data = rt)
+	   pValue=1-pchisq(diff$chisq,df=1)
+	   fit=survfit(Surv(futime, fustat) ~ a, data = rt)
+
+	   if(pValue<pFilter){
+	        outTab=rbind(outTab,cbind(gene=gene,pval=pValue) )
+					#绘制生存曲线
+					if(pValue<0.001){
+							   pValue="<0.001"
+					}else{
+							   pValue=paste0("=",sprintf("%0.3f",pValue))
+					}
+					surPlot=ggsurvplot(fit, 
+								           data=rt,
+								           conf.int=TRUE,
+								           pval=paste0("p",pValue),
+								           pval.size=5,
+								           risk.table=T,
+								           legend.labs=c("high","low"),
+								           legend.title=paste0(gene," level"),
+								           xlab="Time(years)",
+								           break.time.by = 1,
+								           risk.table.title="",
+								           palette=c("red", "blue"),
+								           risk.table.height=.25)          
+					pdf(file=paste0("sur.",gene,".pdf"), width = 6, height = 5.5,onefile = FALSE)
+					print(surPlot)
+					dev.off()
+		 }
+}
+write.table(outTab,file="geneSur.result.xls",sep="\t",row.names=F,quote=F)    #输出基因和p值表格文件
+
+
+
+
+###14 GO and KEGG
+BiocManager::install('org.Hs.eg.db')
+library(clusterProfiler)
+library(data.table)
+library(ggsci)
+dat <- fread('PSAT1--top20')
+
+library(DOSE)
+library(org.Hs.eg.db)
+
+egUP = bitr(dat$`#node`, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Hs.eg.db")
+egoBPUP <- enrichGO(gene=egUP$ENTREZID,OrgDb = 'org.Hs.eg.db',ont= "BP",pAdjustMethod = "BH",pvalueCutoff  = 0.05,qvalueCutoff  = 0.1,readable=TRUE)
+dotplot(egoBPUP)
+mydotplot <- function(ego,name,show=15){
+        library(ggplot2)
+        b= function(x){tem=as.integer(x[1])/as.integer(x[2]);return(tem)}
+        tem = as.data.frame(ego)
+        tem = na.omit(tem)
+        Max_len <- max(str_count(tem$Description))
+        wid=7
+        if(Max_len >100){
+                wid=Max_len/10
+        }
+        if(Max_len >70 && Max_len <100){
+                wid=Max_len/9
+        }
+        if(nrow(tem)>0){
+        y=c()
+        if(nrow(tem) > 15){
+        tem = tem[1:15,]
+    }
+        for(i in strsplit(as.character(tem$GeneRatio),"/")){
+                y=c(y,b(i))
+    }
+        p=ggplot(tem,aes(x=Description,y=y,colour=p.adjust))+geom_point(aes(size=Count))+coord_flip()+labs(size="Count",colour="p.adjust")+theme(text=element_text(family='Times',size=15),axis.line=element_line(colour='black',size=1),axis.ticks.x=element_line(size=2),axis.ticks.y=element_line(size=2),panel.background=element_blank())+scale_color_gradient(low='green',high='red')+labs(y="GeneRatio")
+        ggsave(p,filename=paste(name,'_dot.pdf',sep=""),width=wid)
+        }else{print("Does not enriching")}
+}
+mydotplot(egoBPUP,substitute(egoBPUP))
+barplot(egoBPUP,showCategory = 20)
+library(ggplot2)
+pdf('BP_barplot_v1.pdf')
+barplot(egoBPUP,showCategory = 15)+scale_fill_gradient(low = "#E7298A",high="#1B9E77")
+dev.off()
+
+pdf('BP_dotplot.pdf')
+dotplot(egoBPUP)
+dev.off()
+ekkUP <- enrichKEGG(gene         = egUP$ENTREZID ,organism     = 'hsa',pvalueCutoff = 0.05)
+dotplot(ekkUP)
+library(ggsci)
+dotplot(ekkUP)+scale_color_d3()
+dotplot(ekkUP)
+pdf('KEGG_plot.pdf')
+dotplot(ekkUP)+scale_color_gradient(low="#C70039",high="#1ABC9C")
+dev.off()
+savehistory('enrich_plot.R')
